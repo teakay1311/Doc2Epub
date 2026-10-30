@@ -1,0 +1,6 @@
+{
+  "name": "Doc2EPUB",
+  "description": "Chuyển đổi PDF, Word (DOCX) và tài liệu văn bản thành sách điện tử EPUB chuẩn, bảo mật trực tiếp trên trình duyệt.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
