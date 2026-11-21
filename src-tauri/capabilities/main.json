@@ -1,0 +1,12 @@
+{
+  "identifier": "main",
+  "description": "Local document import and application menus",
+  "windows": ["main"],
+  "permissions": [
+    "core:event:default",
+    "core:menu:default",
+    "dialog:allow-open",
+    "fs:allow-stat",
+    "fs:allow-read-file"
+  ]
+}

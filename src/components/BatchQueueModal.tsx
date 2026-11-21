@@ -1,244 +1,90 @@
-import React, { useRef, useState } from 'react';
-import { X, UploadCloud, Play, CheckCircle2, AlertCircle, Loader2, Download, Trash2, Files } from 'lucide-react';
-import { BatchItem } from '../types/document';
-import { parseDocumentFile } from '../services/documentService';
-import { generateEpub } from '../utils/epubGenerator';
+import { useEffect, useRef } from 'react';
+import { X, Trash2 } from 'lucide-react';
+import type { BatchItem } from '../types/document';
 import { useLanguage } from '../context/LanguageContext';
+import { formatDocumentMessage } from '../i18n/documentMessages';
 
-interface BatchQueueModalProps {
+interface BatchQueueProps {
+  items: BatchItem[];
   isOpen: boolean;
+  isBusy: boolean;
+  isProcessing: boolean;
   onClose: () => void;
-  batchItems: BatchItem[];
-  onUpdateBatchItems: (items: BatchItem[]) => void;
+  onAdd: () => void;
+  onRemove: (id: string) => void;
+  onRun: () => void;
+  onSave: (item: BatchItem) => void;
+  notice: { text: string; error?: boolean } | null;
 }
 
-export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
-  isOpen,
-  onClose,
-  batchItems,
-  onUpdateBatchItems
-}) => {
-  const { t } = useLanguage();
-  const [isProcessingQueue, setIsProcessingQueue] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  if (!isOpen) return null;
-
-  const handleAddFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      const newItems: BatchItem[] = Array.from(e.target.files).map((f) => ({
-        id: `batch-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
-        file: f,
-        status: 'pending'
-      }));
-      onUpdateBatchItems([...batchItems, ...newItems]);
-    }
-  };
-
-  const removeBatchItem = (id: string) => {
-    onUpdateBatchItems(batchItems.filter((item) => item.id !== id));
-  };
-
-  const runBatchProcessing = async () => {
-    if (isProcessingQueue) return;
-    setIsProcessingQueue(true);
-
-    const items = [...batchItems];
-
-    for (let i = 0; i < items.length; i++) {
-      if (items[i].status === 'done') continue;
-
-      items[i].status = 'processing';
-      onUpdateBatchItems([...items]);
-
-      try {
-        const { doc } = await parseDocumentFile(items[i].file);
-        const { blob } = await generateEpub(doc);
-
-        items[i].status = 'done';
-        items[i].resultBlob = blob;
-        items[i].resultSize = blob.size;
-        items[i].resultFilename = items[i].file.name.replace(/\.[^/.]+$/, '') + '.epub';
-        items[i].doc = doc;
-      } catch (err: any) {
-        items[i].status = 'error';
-        items[i].error = err.message || 'Error processing document';
-      }
-
-      onUpdateBatchItems([...items]);
-    }
-
-    setIsProcessingQueue(false);
-  };
-
-  const downloadItemResult = (item: BatchItem) => {
-    if (!item.resultBlob || !item.resultFilename) return;
-    const url = URL.createObjectURL(item.resultBlob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = item.resultFilename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
-  };
-
-  const formatSize = (bytes: number): string => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-  };
+export function BatchQueueModal({ items, isOpen, isBusy, isProcessing, onClose, onAdd, onRemove, onRun, onSave, notice }: BatchQueueProps) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const { t, language } = useLanguage();
+  const vi = language === 'vi';
+  const nameCounts = new Map<string, number>();
+  const pathCounts = new Map<string, number>();
+  for (const { input } of items) {
+    nameCounts.set(input.name, (nameCounts.get(input.name) || 0) + 1);
+    pathCounts.set(input.path, (pathCounts.get(input.path) || 0) + 1);
+  }
+  const occurrences = new Map<string, number>();
+  const saveLabel = vi ? 'Lưu EPUB…' : 'Save EPUB…';
+  useEffect(() => {
+    if (isOpen) dialog.current?.showModal();
+    else dialog.current?.close();
+  }, [isOpen]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-150">
-      <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-2xl max-h-[85vh] flex flex-col shadow-xl overflow-hidden">
-        {/* Header */}
-        <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
-              <Files className="w-4 h-4" />
-            </div>
-            <div>
-              <h3 className="text-base font-bold text-slate-900">
-                {t.batch.title}
-              </h3>
-              <p className="text-xs text-slate-500">
-                {t.batch.subtitle}
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <kbd className="hidden sm:inline-block px-1.5 py-0.5 text-[10px] font-mono bg-slate-100 border border-slate-200 rounded text-slate-500">
-              Esc
-            </kbd>
-            <button
-              onClick={onClose}
-              className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
-              title="Close (Esc)"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-        </div>
-
-        {/* Action Bar */}
-        <div className="px-6 py-3 bg-slate-50/70 border-b border-slate-200 flex items-center justify-between gap-3">
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            accept=".pdf,.docx,.txt,.md,.markdown,.html,.htm"
-            onChange={handleAddFiles}
-            className="hidden"
-          />
-
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isProcessingQueue}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 transition-colors cursor-pointer disabled:opacity-50"
-          >
-            <UploadCloud className="w-3.5 h-3.5" />
-            <span>{t.batch.addFiles}</span>
-          </button>
-
-          <button
-            onClick={runBatchProcessing}
-            disabled={isProcessingQueue || batchItems.length === 0}
-            className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer disabled:opacity-50"
-          >
-            {isProcessingQueue ? (
-              <>
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                <span>{t.batch.processing}</span>
-              </>
-            ) : (
-              <>
-                <Play className="w-3.5 h-3.5" />
-                <span>{t.batch.startAll} ({batchItems.length})</span>
-              </>
-            )}
-          </button>
-        </div>
-
-        {/* List of items */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-2.5">
-          {batchItems.length === 0 ? (
-            <div className="py-12 text-center text-slate-400 space-y-2">
-              <Files className="w-10 h-10 mx-auto stroke-1" />
-              <p className="text-sm font-medium text-slate-700">{t.batch.emptyTitle}</p>
-              <p className="text-xs text-slate-500">{t.batch.emptyDesc}</p>
-            </div>
-          ) : (
-            batchItems.map((item, idx) => (
-              <div
-                key={item.id}
-                className="flex items-center justify-between gap-3 p-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50/50 transition-colors text-sm"
-              >
-                <div className="flex items-center gap-3 min-w-0 flex-1">
-                  <span className="text-xs font-mono text-slate-400 w-4 text-right shrink-0">
-                    {idx + 1}.
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="font-medium text-slate-900 truncate text-xs">
-                      {item.file.name}
-                    </p>
-                    <p className="text-[11px] text-slate-500">
-                      {formatSize(item.file.size)}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2 shrink-0">
-                  {item.status === 'pending' && (
-                    <span className="text-xs text-slate-500 px-2 py-0.5 bg-slate-100 rounded-md">
-                      {t.batch.pending}
-                    </span>
-                  )}
-                  {item.status === 'processing' && (
-                    <span className="inline-flex items-center gap-1 text-xs text-indigo-600 px-2 py-0.5 bg-indigo-50 rounded-md font-medium">
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                      {t.batch.inProgress}
-                    </span>
-                  )}
-                  {item.status === 'done' && (
-                    <div className="flex items-center gap-2">
-                      <span className="inline-flex items-center gap-1 text-xs text-emerald-600 px-2 py-0.5 bg-emerald-50 rounded-md font-medium">
-                        <CheckCircle2 className="w-3 h-3" />
-                        {t.batch.done} ({formatSize(item.resultSize || 0)})
-                      </span>
-                      <button
-                        onClick={() => downloadItemResult(item)}
-                        className="inline-flex items-center gap-1 text-xs px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md font-semibold cursor-pointer"
-                        title={t.batch.download}
-                      >
-                        <Download className="w-3 h-3" />
-                        {t.batch.download}
-                      </button>
-                    </div>
-                  )}
-                  {item.status === 'error' && (
-                    <span className="inline-flex items-center gap-1 text-xs text-red-600 px-2 py-0.5 bg-red-50 rounded-md" title={item.error}>
-                      <AlertCircle className="w-3 h-3" />
-                      {t.batch.error}
-                    </span>
-                  )}
-
-                  {!isProcessingQueue && (
-                    <button
-                      onClick={() => removeBatchItem(item.id)}
-                      className="p-1 text-slate-400 hover:text-red-600 hover:bg-slate-100 rounded transition-colors cursor-pointer"
-                      title={t.batch.remove}
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))
-          )}
-        </div>
+    <dialog ref={dialog} aria-labelledby="batch-title" onCancel={onClose}
+      className="m-auto max-h-[85vh] w-[min(40rem,calc(100%-2rem))] rounded-2xl border border-slate-200 bg-white p-0 shadow-2xl backdrop:bg-slate-900/35">
+      <header className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
+        <h2 id="batch-title" className="font-semibold">{t.header.batchQueue}</h2>
+        <button type="button" onClick={onClose} aria-label={vi ? 'Đóng' : 'Close'} className="rounded-md p-2 hover:bg-slate-100"><X size={18} /></button>
+      </header>
+      <div className="flex gap-2 border-b border-slate-200 p-4">
+        <button type="button" disabled={isBusy} onClick={onAdd}
+          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm disabled:opacity-50">{t.batch.addFiles}</button>
+        <button type="button" disabled={isBusy || items.every(item => item.status === 'done')} onClick={onRun}
+          className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm text-white disabled:opacity-50">
+          {isProcessing ? t.batch.processing : t.batch.startAll}
+        </button>
       </div>
-    </div>
+      {notice && <p className={`px-4 pt-3 text-sm ${notice.error ? "text-red-800" : "text-slate-600"}`} role={notice.error ? "alert" : "status"}>{notice.text}</p>}
+      {items.length === 0 && <p className="p-5 text-sm text-slate-600">{t.batch.emptyDesc}</p>}
+      <ul className="divide-y divide-slate-100 px-4">
+        {items.map(item => {
+          const { name, path } = item.input;
+          const occurrence = (occurrences.get(path) || 0) + 1;
+          occurrences.set(path, occurrence);
+          const folder = path.slice(0, path.lastIndexOf('/')) || '/';
+          const origin = (nameCounts.get(name) || 0) > 1
+            ? folder + ((pathCounts.get(path) || 0) > 1 ? ` · #${occurrence}` : '') : '';
+          const source = origin ? `${name} — ${origin}` : name;
+          return <li key={item.id} className="flex items-start gap-3 py-3 text-sm">
+            <div className="min-w-0 grow">
+              <p className="break-all font-medium">{name}</p>
+              {origin && <p className="break-all text-xs text-slate-600">{origin}</p>}
+              <p role="status" className={item.status === 'error' ? 'text-red-700' : 'text-slate-600'}>
+                {item.status === 'processing' ? t.batch.inProgress
+                  : item.status === 'error' ? formatDocumentMessage(item.error ?? '', language) : t.batch[item.status]}
+              </p>
+              {item.warnings?.map(warning => <p key={warning} className="text-amber-800">{warning}</p>)}
+              {item.exportWarningCodes?.map(code =>
+                <p key={code} className="text-amber-800">{formatDocumentMessage(code, language)}</p>)}
+              {!!item.emptyOcrPages?.length && <p className="text-amber-800">
+                {vi ? 'OCR không đọc được chữ ở trang' : 'OCR found no text on pages'} {item.emptyOcrPages.join(', ')}
+              </p>}
+            </div>
+            {item.resultBlob && <button type="button" disabled={isBusy} onClick={() => onSave(item)}
+              aria-label={`${saveLabel} ${source}`}
+              className="rounded-md border border-slate-300 px-2.5 py-1 disabled:opacity-50">{saveLabel}</button>}
+            {!isProcessing && <button type="button" disabled={isBusy} onClick={() => onRemove(item.id)}
+              aria-label={`${t.batch.remove}: ${source}`} className="rounded-md p-1.5 text-slate-600 hover:bg-slate-100">
+              <Trash2 size={16} />
+            </button>}
+          </li>;
+        })}
+      </ul>
+    </dialog>
   );
-};
+}

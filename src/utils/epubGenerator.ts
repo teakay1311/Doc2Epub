@@ -1,6 +1,8 @@
 import JSZip from 'jszip';
-import { NormalizedDocument, Chapter, ContentElement, EpubValidationResult } from '../types/document';
-import { escapeXml } from './normalizer';
+import { NormalizedDocument, ContentElement, EpubValidationResult, InlineRun } from '../types/document';
+import { effectiveBookTitle, effectiveChapterTitle, escapeXml } from './normalizer';
+import { createEpubImageReader } from './epubImages';
+import { validateEpubArchive } from './validateEpub';
 
 /**
  * Generates a standard UUID v4 for EPUB unique-identifier.
@@ -14,22 +16,6 @@ function generateUUID(): string {
     const v = c === 'x' ? r : (r & 0x3) | 0x8;
     return v.toString(16);
   });
-}
-
-/**
- * Converts a data URL to binary data (Uint8Array) and mime type.
- */
-function dataUrlToBinary(dataUrl: string): { data: Uint8Array; mime: string } {
-  const parts = dataUrl.split(',');
-  const mimeMatch = parts[0].match(/:(.*?);/);
-  const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
-  const binaryString = atob(parts[1]);
-  const len = binaryString.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  return { data: bytes, mime };
 }
 
 /**
@@ -52,6 +38,16 @@ function getExtensionForMime(mime: string): string {
   }
 }
 
+function renderInline(text: string, runs?: InlineRun[]): string {
+  if (!runs) return escapeXml(text);
+  return runs.map(run => {
+    let value = escapeXml(run.text);
+    if (run.bold) value = `<strong>${value}</strong>`;
+    if (run.italic) value = `<em>${value}</em>`;
+    return value;
+  }).join('');
+}
+
 /**
  * Renders ContentElement into valid XHTML.
  */
@@ -60,24 +56,25 @@ function renderElementToXhtml(el: ContentElement): string {
     case 'heading': {
       const level = el.level || 2;
       const tag = `h${level}`;
-      return `<${tag}>${escapeXml(el.text || '')}</${tag}>`;
+      return `<${tag}>${renderInline(el.text || '', el.inline)}</${tag}>`;
     }
     case 'paragraph': {
       if (!el.text) return '';
-      return `<p>${escapeXml(el.text)}</p>`;
+      return `<p>${renderInline(el.text, el.inline)}</p>`;
     }
     case 'list': {
       const tag = el.listType === 'ordered' ? 'ol' : 'ul';
+      const start = tag === 'ol' && Number.isSafeInteger(el.listStart) ? ` start="${el.listStart}"` : '';
       const items = (el.items || [])
-        .map((item) => `<li>${escapeXml(item)}</li>`)
+        .map((item, index) => `<li>${renderInline(item, el.itemInline?.[index])}</li>`)
         .join('\n');
-      return `<${tag}>\n${items}\n</${tag}>`;
+      return `<${tag}${start}>\n${items}\n</${tag}>`;
     }
     case 'blockquote': {
-      return `<blockquote><p>${escapeXml(el.text || '')}</p></blockquote>`;
+      return `<blockquote><p>${renderInline(el.text || '', el.inline)}</p></blockquote>`;
     }
     case 'code': {
-      return `<pre><code>${escapeXml(el.text || '')}</code></pre>`;
+      return `<pre><code>${renderInline(el.text || '', el.inline)}</code></pre>`;
     }
     case 'divider': {
       return `<hr class="section-divider"/>`;
@@ -86,17 +83,17 @@ function renderElementToXhtml(el: ContentElement): string {
       let html = '<div class="table-wrapper"><table class="doc-table">\n';
       if (el.headers && el.headers.length > 0) {
         html += '<thead><tr>\n';
-        for (const th of el.headers) {
-          html += `<th>${escapeXml(th)}</th>\n`;
+        for (const [column, th] of el.headers.entries()) {
+          html += `<th>${renderInline(th, el.headerInline?.[column])}</th>\n`;
         }
         html += '</tr></thead>\n';
       }
       if (el.rows && el.rows.length > 0) {
         html += '<tbody>\n';
-        for (const row of el.rows) {
+        for (const [index, row] of el.rows.entries()) {
           html += '<tr>\n';
-          for (const cell of row) {
-            html += `<td>${escapeXml(cell)}</td>\n`;
+          for (const [column, cell] of row.entries()) {
+            html += `<td>${renderInline(cell, el.rowInline?.[index]?.[column])}</td>\n`;
           }
           html += '</tr>\n';
         }
@@ -109,10 +106,10 @@ function renderElementToXhtml(el: ContentElement): string {
       if (!el.src) return '';
       const alt = escapeXml(el.alt || 'Hình ảnh');
       const caption = el.caption ? `<figcaption>${escapeXml(el.caption)}</figcaption>` : '';
-      return `<figure class="doc-figure">\n<img src="${el.src}" alt="${alt}"/>\n${caption}</figure>`;
+      return `<figure class="doc-figure">\n<img src="${escapeXml(el.src)}" alt="${alt}"/>\n${caption}</figure>`;
     }
     default:
-      return el.text ? `<p>${escapeXml(el.text)}</p>` : '';
+      return el.text ? `<p>${renderInline(el.text, el.inline)}</p>` : '';
   }
 }
 
@@ -231,12 +228,33 @@ pre {
 /**
  * Builds and returns a valid EPUB 3 Reflowable archive.
  */
-export async function generateEpub(doc: NormalizedDocument): Promise<{ blob: Blob; validation: EpubValidationResult }> {
+export async function generateEpub(
+  doc: NormalizedDocument,
+  signal?: AbortSignal
+): Promise<{ blob: Blob; validation: EpubValidationResult }> {
+  signal?.throwIfAborted();
+  const images = createEpubImageReader(signal);
+  try {
+    return await buildEpub(doc, images.read, signal);
+  } finally {
+    images.dispose();
+  }
+}
+
+async function buildEpub(
+  doc: NormalizedDocument,
+  readImage: ReturnType<typeof createEpubImageReader>['read'],
+  signal?: AbortSignal
+): Promise<{ blob: Blob; validation: EpubValidationResult }> {
   const zip = new JSZip();
   const uuid = `urn:uuid:${generateUUID()}`;
   const modifiedDate = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
-  const lang = doc.metadata.language || 'vi';
-  const title = doc.metadata.title || doc.filename.replace(/\.[^/.]+$/, '');
+  if (!doc.chapters.some(chapter => chapter.elements.some(element => element.type !== 'divider'))) {
+    throw new Error('NO_CONTENT');
+  }
+  const lang = escapeXml(doc.metadata.language || 'vi');
+  const warnings: string[] = [];
+  const title = effectiveBookTitle(doc);
   const author = doc.metadata.author || 'Tác giả khuyết danh';
 
   // 1. mimetype: MUST be first entry, uncompressed
@@ -264,9 +282,10 @@ export async function generateEpub(doc: NormalizedDocument): Promise<{ blob: Blo
 
   // 4. Handle Cover Image if present
   let hasCover = false;
-  if (doc.metadata.coverImage && doc.metadata.coverImage.dataUrl) {
-    try {
-      const { data, mime } = dataUrlToBinary(doc.metadata.coverImage.dataUrl);
+  if (doc.metadata.coverImage?.dataUrl) {
+    const cover = await readImage(doc.metadata.coverImage.dataUrl);
+    if (cover) {
+      const { data, mime } = cover;
       const ext = getExtensionForMime(mime);
       const coverImgHref = `images/cover.${ext}`;
       zip.file(`OEBPS/${coverImgHref}`, data);
@@ -305,29 +324,23 @@ export async function generateEpub(doc: NormalizedDocument): Promise<{ blob: Blo
       });
       spineItems.push({ idref: 'cover-page', linear: 'no' });
       hasCover = true;
-    } catch (err) {
-      console.warn('Failed to encode cover image:', err);
+    } else {
+      warnings.push('INVALID_COVER');
     }
   }
 
   // 5. Chapters and embedded images
   let imageCounter = 1;
-  const processedChapters = doc.chapters.length > 0 ? doc.chapters : [
-    {
-      id: 'ch-1',
-      title: title,
-      order: 1,
-      elements: [{ id: 'el-1', type: 'paragraph' as const, text: 'Nội dung sách.' }],
-      includedInToc: true
-    }
-  ];
+  let hasChapterContent = false;
+  const processedChapters = doc.chapters;
 
   const tocEntries: Array<{ title: string; href: string }> = [];
 
-  processedChapters.forEach((chapter, index) => {
+  for (const [index, chapter] of processedChapters.entries()) {
     const chapterNum = index + 1;
     const chapterId = `chapter-${chapterNum}`;
     const chapterHref = `${chapterId}.xhtml`;
+    const chapterTitle = effectiveChapterTitle(chapter.title, title);
 
     manifestItems.push({
       id: chapterId,
@@ -339,64 +352,71 @@ export async function generateEpub(doc: NormalizedDocument): Promise<{ blob: Blo
 
     if (chapter.includedInToc) {
       tocEntries.push({
-        title: chapter.title || `Chương ${chapterNum}`,
+        title: chapterTitle,
         href: chapterHref
       });
     }
 
     // Process elements in chapter & extract images if base64
     const filteredElements = chapter.elements.filter(
-      (el, idx) => !(idx === 0 && el.type === 'heading' && el.text === chapter.title)
+      (el, idx) => !(idx === 0 && el.type === 'heading' && (el.id === chapter.headingId || el.text === chapter.title))
     );
+    if (filteredElements.length < chapter.elements.length) hasChapterContent = true;
 
     const renderedElements: string[] = [];
     for (const el of filteredElements) {
-      if (el.type === 'image' && el.src && el.src.startsWith('data:')) {
-        try {
-          const { data, mime } = dataUrlToBinary(el.src);
-          const ext = getExtensionForMime(mime);
-          const imgFilename = `img_${imageCounter++}.${ext}`;
-          const imgPath = `images/${imgFilename}`;
-          zip.file(`OEBPS/${imgPath}`, data);
-
-          const imgId = `image-${imageCounter}`;
-          manifestItems.push({
-            id: imgId,
-            href: imgPath,
-            mediaType: mime
-          });
-
-          // Replace src with relative path
-          const modifiedEl = { ...el, src: imgPath };
-          renderedElements.push(renderElementToXhtml(modifiedEl));
+      if (el.type === 'image') {
+        const image = await readImage(el.src || '');
+        if (!image) {
+          warnings.push('INVALID_EMBEDDED_IMAGE');
           continue;
-        } catch {
-          // ignore corrupted image
         }
+        const { data, mime } = image;
+        const ext = getExtensionForMime(mime);
+        const imgFilename = `img_${imageCounter}.${ext}`;
+        const imgPath = `images/${imgFilename}`;
+        zip.file(`OEBPS/${imgPath}`, data);
+
+        const imgId = `image-${imageCounter++}`;
+        manifestItems.push({
+          id: imgId,
+          href: imgPath,
+          mediaType: mime
+        });
+
+        // Replace src with relative path
+        const modifiedEl = { ...el, src: imgPath };
+        renderedElements.push(renderElementToXhtml(modifiedEl));
+        hasChapterContent = true;
+        continue;
       }
-      renderedElements.push(renderElementToXhtml(el));
+      const xhtml = renderElementToXhtml(el);
+      renderedElements.push(xhtml);
+      if (xhtml && el.type !== 'divider') hasChapterContent = true;
     }
 
     const chapterXhtml = `<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="${lang}" lang="${lang}">
 <head>
-  <title>${escapeXml(chapter.title)}</title>
+  <title>${escapeXml(chapterTitle)}</title>
   <meta charset="utf-8"/>
   <link rel="stylesheet" type="text/css" href="css/stylesheet.css"/>
 </head>
 <body class="chapter-body">
   <section epub:type="chapter" role="doc-chapter">
-    <h1 class="chapter-title">${escapeXml(chapter.title)}</h1>
+    <h1 class="chapter-title">${escapeXml(chapterTitle)}</h1>
     ${renderedElements.join('\n    ')}
   </section>
 </body>
 </html>`;
 
     zip.file(`OEBPS/${chapterHref}`, chapterXhtml);
-  });
+  }
+  if (!hasChapterContent) throw new Error('NO_CONTENT');
 
   // 6. Navigation Document (nav.xhtml - EPUB 3 requirement)
+  if (tocEntries.length === 0) tocEntries.push({ title: lang === 'vi' ? 'Nội dung' : 'Contents', href: 'chapter-1.xhtml' });
   const navListItems = tocEntries
     .map((toc) => `      <li><a href="${toc.href}">${escapeXml(toc.title)}</a></li>`)
     .join('\n');
@@ -420,7 +440,6 @@ ${navListItems || '      <li><a href="chapter-1.xhtml">Nội dung</a></li>'}
     <h2>Landmarks</h2>
     <ol>
       ${hasCover ? '<li><a epub:type="cover" href="cover.xhtml">Bìa sách</a></li>' : ''}
-      <li><a epub:type="toc" href="nav.xhtml#toc">Mục lục</a></li>
       <li><a epub:type="bodymatter" href="chapter-1.xhtml">Nội dung chính</a></li>
     </ol>
   </nav>
@@ -492,6 +511,7 @@ ${spineXml}
 </package>`;
   zip.file('OEBPS/content.opf', contentOpf);
 
+  signal?.throwIfAborted();
   // 9. Generate the zip Blob
   const blob = await zip.generateAsync({
     type: 'blob',
@@ -500,33 +520,16 @@ ${spineXml}
     compressionOptions: { level: 9 }
   });
 
-  // 10. Self-Validation
+  signal?.throwIfAborted();
+  const errors = await validateEpubArchive(await blob.arrayBuffer(), spineItems.map(item => item.idref));
+  signal?.throwIfAborted();
   const validation: EpubValidationResult = {
-    isValid: true,
-    errors: [],
-    warnings: [],
+    isValid: errors.length === 0,
+    errors,
+    warnings: [...new Set(warnings)],
     fileSize: blob.size,
     chapterCount: processedChapters.length,
     assetCount: manifestItems.length
   };
-
-  // Inspect generated files
-  const fileKeys = Object.keys(zip.files);
-  if (fileKeys[0] !== 'mimetype') {
-    validation.warnings.push('Mimetype file is not the first file in archive');
-  }
-  if (!fileKeys.includes('META-INF/container.xml')) {
-    validation.errors.push('Thiếu file META-INF/container.xml');
-    validation.isValid = false;
-  }
-  if (!fileKeys.includes('OEBPS/content.opf')) {
-    validation.errors.push('Thiếu file OEBPS/content.opf');
-    validation.isValid = false;
-  }
-  if (!fileKeys.includes('OEBPS/nav.xhtml')) {
-    validation.errors.push('Thiếu navigation document (OEBPS/nav.xhtml)');
-    validation.isValid = false;
-  }
-
   return { blob, validation };
 }

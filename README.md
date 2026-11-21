@@ -1,115 +1,40 @@
-# Doc2EPUB — Document to EPUB Converter (Chuẩn EPUB 3 Reflowable)
+# Doc2EPUB cho macOS
 
-Ứng dụng web chuyển đổi tài liệu đa định dạng (**PDF, Word DOCX, TXT, Markdown, HTML**) sang sách điện tử **EPUB 3 Reflowable** chuẩn quốc tế, hoạt động **100% trong trình duyệt (Client-Side Only)**, bảo mật dữ liệu tuyệt đối và hỗ trợ tiếng Việt hoàn hảo.
+Doc2EPUB chuyển PDF, Word (.docx), TXT, Markdown và HTML thành sách EPUB 3 có chữ tự dàn theo màn hình. Bản 1.0 dành cho **Apple Silicon**. Bundle đặt mốc tối thiểu **macOS 15**.
 
----
+## Cài và dùng
 
-## 1. Tính năng đã hoàn thành
+1. Tải [Doc2EPUB-1.0.0-arm64.dmg](https://github.com/teakay1311/Doc2Epub/releases/download/v1.0.0/Doc2EPUB-1.0.0-arm64.dmg), mở tệp và kéo **Doc2EPUB** vào **Applications**.
+2. Kéo thả tài liệu vào cửa sổ hoặc nhấn **⌘O**. Nếu chọn nhiều tệp, ứng dụng mở hàng đợi.
+3. Xem trước và mở **Tùy chọn sách** để chỉnh tên sách, tác giả, bìa hoặc mục lục.
+4. Với PDF scan, chọn **OCR trang scan** hoặc **OCR toàn bộ PDF**. Hàng đợi tự OCR các trang nghi là scan với tiếng Việt và tiếng Anh. Cảnh báo cho biết trang nào OCR xong mà không tìm thấy chữ.
+5. Nhấn **⌘↵** và chọn nơi lưu EPUB. Trong hàng đợi, lưu từng kết quả từ dòng tương ứng.
 
-### Mức P0 — Bắt buộc & Cốt lõi
-- [x] **Nhập & Kéo thả tài liệu**: Hỗ trợ `.pdf`, `.docx`, `.txt`, `.md`, `.html` với kiểm tra định dạng và cấu trúc tệp thực tế.
-- [x] **DOCX (Word) sang EPUB**: Trích xuất qua Mammoth, bảo toàn thứ tự văn bản, heading, in đậm/nghiêng, danh sách, bảng biểu và hình ảnh nhúng.
-- [x] **PDF có văn bản sang EPUB**: Trích xuất qua PDF.js, sắp xếp thứ tự đọc hình học (tọa độ Y/X), ghép dòng thông minh, loại bỏ ngắt đoạn lỗi.
-- [x] **TXT, Markdown & HTML**:
-  - Hỗ trợ chuẩn Unicode NFC tiếng Việt, xử lý BOM UTF-8.
-  - Phân tích cú pháp Markdown (#, ##, blockquote, danh sách, bảng biểu ma trận).
-  - Làm sạch mã HTML bằng DOMPurify chống XSS, giữ cấu trúc ngữ nghĩa an toàn.
-- [x] **OCR cho PDF Scan**: Nhận dạng quang học qua Tesseract.js trực tiếp trên trình duyệt, phát hiện trang scan dạng ảnh, hỗ trợ tiếng Việt và tiếng Anh.
-- [x] **Tự động nhận diện chương & tạo mục lục**: Phát hiện các mẫu tiêu đề tiếng Việt ("Chương 1", "Hồi 1", "Phần I", "Mục 1", "Lời mở đầu"...) và tiếng Anh.
-- [x] **Tùy biến metadata & Ảnh bìa sách**: Chỉnh sửa tên sách, tác giả, ngôn ngữ (`vi`, `en`, `fr`...), tải ảnh bìa tùy chọn (JPG/PNG) chuẩn tỷ lệ máy đọc sách.
-- [x] **Bản xem trước sách điện tử (Live Ebook Preview)**:
-  - Xem trước nội dung thực tế đã chuẩn hóa.
-  - Chuyển đổi phông chữ Serif (Lora) và Sans (Plus Jakarta Sans).
-  - Tùy chỉnh kích thước chữ (A- / A+).
-  - Điều hướng chương mượt mà, tính toán thời gian đọc ước tính.
-- [x] **Đóng gói & Kiểm tra EPUB 3 Reflowable**:
-  - Tệp `mimetype` đặt đầu tiên và lưu trữ không nén (`STORE`).
-  - `META-INF/container.xml` trỏ chính xác đến gói OPF.
-  - `OEBPS/content.opf` với định danh UUID chuẩn, metadata Dublin Core, manifest đầy đủ tài nguyên và spine.
-  - `OEBPS/nav.xhtml` chuẩn HTML5 Navigation Document và `OEBPS/toc.ncx` tương thích ngược EPUB 2.
-  - Tự kiểm tra cấu trúc (Self-validation) trước khi tải về.
+Menu **Trợ giúp** có ba tài liệu mẫu. Đổi giao diện trong **Doc2EPUB → Cài đặt**. Giới hạn đầu vào là 80 MiB mỗi tệp. PDF có mật khẩu cần được mở khóa trước khi chuyển đổi. Tài nguyên PDF và OCR đi kèm bản cài để sử dụng ngay khi offline.
 
-### Mức P1 — Nâng cao & Tiện ích
-- [x] **Chỉnh sửa mục lục (TOC Manager)**:
-  - Cho phép đổi tên trực tiếp từng chương sách.
-  - Ẩn/hiện chương khỏi mục lục EPUB mà không làm mất nội dung văn bản.
-- [x] **Chế độ OCR linh hoạt**: Lựa chọn OCR các trang scan được phát hiện hoặc OCR toàn bộ tài liệu PDF.
-- [x] **Hàng đợi chuyển đổi nhiều tệp (Batch Queue)**: Chọn nhiều tệp, xử lý tuần tự độc lập, lỗi một tệp không dừng toàn bộ hàng đợi, tải từng kết quả riêng.
-- [x] **1-Click Test Samples**: Tích hợp sẵn 3 tài liệu mẫu tiếng Việt phong phú (Truyện Kiều, Cẩm nang Năng suất, Kiến trúc Web) để kiểm thử quy trình ngay lập tức.
+Bản DMG dùng chữ ký ad hoc và chưa được Apple notarize.
 
----
+## Build lại trên Apple Silicon
 
-## 2. Kiến trúc Hệ thống
+Cần Node.js 24 trở lên, Rust stable và Xcode hoặc Xcode Command Line Tools.
 
-Quy trình xử lý theo kiến trúc 6 giai đoạn nghiêm ngặt:
-
-```text
-Document Import (PDF, DOCX, TXT, MD, HTML)
-       ↓
-Document Extraction (PDF.js, Mammoth, Tesseract.js, DOMPurify)
-       ↓
-Content Normalization (Unicode NFC, Chapter Detector, Paragraph Stitcher)
-       ↓
-Unified Document Model (DocumentContent, Chapters, Elements, Metadata)
-       ↓
-EPUB 3 Generator (JSZip, OEBPS Structure, XML Escaping, Nav Document)
-       ↓
-Self-Validation & Client-Side Download
+```sh
+npm ci --include=optional
+npm run lint
+npm test
+npm run build:mac
 ```
 
----
+Script tạo `out/Doc2EPUB.app`, DMG và tệp SHA-256. Để mở ứng dụng trong môi trường phát triển, chạy `npm run tauri -- dev`.
 
-## 3. Thư viện sử dụng & Giấy phép
+Với lỗi linker `mis-aligned LINKEDIT string pool` trên Xcode 27, có thể dùng macOS 26.5 SDK từ Command Line Tools cùng linker LLD của Rust bằng lệnh sau.
 
-| Thư viện | Phiên bản | Mục đích sử dụng | Giấy phép |
-|---|---|---|---|
-| `react` & `react-dom` | ^19.0.1 | Giao diện người dùng và quản lý trạng thái | MIT |
-| `pdfjs-dist` | ^4.10.38 | Trích xuất văn bản và render trang PDF | Apache-2.0 |
-| `mammoth` | ^1.9.1 | Trích xuất Word (.docx) và chuyển đổi hình ảnh inline | BSD-2-Clause |
-| `jszip` | ^3.10.1 | Đóng gói lưu trữ ZIP chuẩn EPUB không nén mimetype | MIT / GPLv3 |
-| `tesseract.js` | ^6.0.0 | Nhận diện ký tự quang học (OCR) trên trình duyệt | Apache-2.0 |
-| `dompurify` | ^3.2.4 | Làm sạch HTML an toàn, chống lỗ hổng XSS | Apache-2.0 / MPL-2.0 |
-| `lucide-react` | ^0.546.0 | Hệ thống biểu tượng giao diện | ISC |
-| `tailwindcss` | ^4.3.3 | Thiết kế giao diện Modern Minimal SaaS | MIT |
-
----
-
-## 4. Báo cáo Kiểm thử
-
-### Unit Tests (Logic Cốt lõi)
-Chạy bằng Node.js Test Runner qua `npx tsx --test`:
-- `normalizeUnicode`: Bảo toàn dấu tiếng Việt và chuyển đổi sang chuẩn Unicode NFC.
-- `cleanText`: Chuẩn hóa khoảng trắng và xử lý non-breaking space.
-- `escapeXml`: Thoát ký tự đặc biệt (`&`, `<`, `>`, `"`, `'`) cho chuẩn XHTML/XML.
-- `isChapterHeader`: Nhận diện chính xác các biến thể chương tiếng Việt ("Chương 1", "Hồi 1", "Phần I", "Mở đầu", "Kết luận") và tiếng Anh.
-- `groupIntoChapters`: Phân tách các phần tử nội dung thành các chương độc lập.
-- `stitchBrokenParagraphs`: Nối các dòng ngắt đoạn không hoàn chỉnh trong PDF/TXT.
-- `calculateDocumentStats`: Đếm chính xác số từ, ký tự, đoạn văn và hình ảnh.
-- `generateEpub`: Kiểm tra cấu trúc lưu trữ ZIP, vị trí file `mimetype` đầu tiên không nén, `container.xml`, và `content.opf`.
-
-**Kết quả: 8/8 tests PASSED (100%)**.
-
-### Kiểm thử Giao diện & Trình duyệt (Browser Automation)
-- **Desktop (1440x900)**: Layout 2 cột cân xứng (Settings & TOC Manager bên trái, Reader Preview bên phải), các nút điều khiển, thanh công cụ đọc sách, kết quả thành công và nút tải về hoạt động mượt mà.
-- **Mobile (390x844)**: Layout reflow dọc mượt mà, thanh Top bar tối ưu vùng hiển thị, modal hàng đợi co giãn chuẩn không bị tràn chiều ngang.
-
----
-
-## 5. Hướng dẫn Chạy & Triển khai
-
-### Chạy môi trường phát triển:
-```bash
-npm install
-npm run dev
+```sh
+DOC2EPUB_USE_SDK26=1 npm run build:mac
 ```
 
-### Chạy bộ kiểm thử:
-```bash
-npx tsx --test src/utils/*.test.ts
-```
+Kiểm tra phần ghi tệp của lớp macOS với `cargo test --locked --manifest-path src-tauri/Cargo.toml`. Chạy `npm run build` trước khi chạy Cargo trực tiếp để tạo tài nguyên web mà macro Tauri cần.
 
-### Đóng gói Production:
-```bash
-npm run build
-```
-Thư mục `dist/` sẵn sàng triển khai trực tiếp lên các nền tảng tĩnh như **Vercel, Cloudflare Pages, Netlify hoặc GitHub Pages** mà không cần bất kỳ cấu hình máy chủ nào.
+## Giấy phép
+
+Doc2EPUB dùng Apache License 2.0. Thông tin giấy phép PDF.js, Tesseract và dữ liệu OCR đi kèm tài nguyên trong ứng dụng.

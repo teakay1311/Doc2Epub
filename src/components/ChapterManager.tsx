@@ -91,6 +91,7 @@ export const ChapterManager: React.FC<ChapterManagerProps> = ({
                         if (e.key === 'Escape') setEditingId(null);
                       }}
                       className="px-2 py-1 text-xs border border-indigo-400 rounded-md bg-white w-full outline-none"
+                      aria-label={t.chapters.renameHint}
                       autoFocus
                     />
                     <button
@@ -102,9 +103,10 @@ export const ChapterManager: React.FC<ChapterManagerProps> = ({
                     </button>
                   </div>
                 ) : (
-                  <span className="truncate text-xs font-medium text-slate-900 flex-1">
+                  <button type="button" onClick={(event) => { event.stopPropagation(); onSelectChapter(ch.id); }}
+                    aria-current={isSelected} className="truncate text-left text-xs font-medium text-slate-900 flex-1">
                     {ch.title}
-                  </span>
+                  </button>
                 )}
               </div>
 
@@ -127,6 +129,7 @@ export const ChapterManager: React.FC<ChapterManagerProps> = ({
                       : 'text-slate-400 hover:text-slate-600'
                   }`}
                   title={t.chapters.tocToggleHint}
+                  aria-pressed={ch.includedInToc}
                 >
                   {ch.includedInToc ? (
                     <CheckSquare className="w-4 h-4" />

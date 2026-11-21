@@ -1,4 +1,4 @@
-import { ContentElement, Chapter, BookMetadata, DocumentStats } from '../types/document';
+import { ContentElement, Chapter, DocumentStats, NormalizedDocument } from '../types/document';
 
 /**
  * Normalizes unicode text to NFC form, preserving Vietnamese accents & characters.
@@ -11,14 +11,29 @@ export function normalizeUnicode(text: string): string {
 /**
  * Escapes characters for strict XML/XHTML compliance.
  */
+const invalidXmlCharacters = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g;
+
 export function escapeXml(str: string): string {
   if (!str) return '';
   return str
+    .replace(invalidXmlCharacters, '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
+}
+
+function trimTitle(title: string): string {
+  return title.replace(invalidXmlCharacters, '').trim();
+}
+
+export function effectiveBookTitle(doc: Pick<NormalizedDocument, 'metadata' | 'filename'>): string {
+  return trimTitle(doc.metadata.title) || effectiveChapterTitle(doc.filename.replace(/\.[^/.]+$/, ''));
+}
+
+export function effectiveChapterTitle(title: string, fallback = 'Doc2EPUB'): string {
+  return trimTitle(title) || fallback;
 }
 
 /**
@@ -72,11 +87,13 @@ export function groupIntoChapters(
   elements: ContentElement[],
   defaultBookTitle: string = 'Nội dung chính'
 ): Chapter[] {
+  const defaultTitle = effectiveChapterTitle(defaultBookTitle);
   if (elements.length === 0) {
     return [
       {
         id: 'ch-default',
-        title: defaultBookTitle,
+        title: defaultTitle,
+        sourceTitle: defaultTitle,
         order: 1,
         elements: [],
         includedInToc: true
@@ -88,7 +105,7 @@ export function groupIntoChapters(
   let currentChapter: Chapter | null = null;
   let chapterIndex = 1;
 
-  for (const el of elements) {
+  for (let el of elements) {
     let startNewChapter = false;
     let newChapterTitle = '';
 
@@ -102,8 +119,7 @@ export function groupIntoChapters(
         startNewChapter = true;
         newChapterTitle = check.title;
         // Upgrade this paragraph to a heading
-        el.type = 'heading';
-        el.level = 2;
+        el = { ...el, type: 'heading', level: 2 };
       }
     }
 
@@ -114,6 +130,7 @@ export function groupIntoChapters(
       currentChapter = {
         id: `ch-${chapterIndex++}`,
         title: newChapterTitle,
+        headingId: el.id,
         order: chapterIndex,
         elements: [el],
         includedInToc: true
@@ -138,14 +155,14 @@ export function groupIntoChapters(
     chapters.push(currentChapter);
   }
 
-  // If there's only one chapter called "Mở đầu", rename to defaultBookTitle
-  if (chapters.length === 1 && chapters[0].title === 'Mở đầu') {
-    chapters[0].title = defaultBookTitle;
+  if (chapters.length === 1 && chapters[0].headingId === undefined) {
+    chapters[0].title = defaultTitle;
   }
 
   // Re-index orders
   chapters.forEach((ch, idx) => {
     ch.order = idx + 1;
+    ch.sourceTitle = ch.title;
   });
 
   return chapters;
