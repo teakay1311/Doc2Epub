@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Chapter, ContentElement } from '../types/document';
+import { Chapter, ContentElement, InlineRun } from '../types/document';
 import { BookOpen, ChevronLeft, ChevronRight, Clock } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
+import { effectiveChapterTitle } from '../utils/normalizer';
 
 interface ContentPreviewProps {
   chapters: Chapter[];
@@ -53,13 +54,14 @@ export const ContentPreview: React.FC<ContentPreviewProps> = ({
 
           {/* Chapter Selector Dropdown */}
           <select
+            aria-label={t.preview.chapterNumber}
             value={currentChapter?.id || ''}
             onChange={(e) => onSelectChapter(e.target.value)}
             className="text-xs py-1 px-2.5 rounded-lg border border-slate-200 bg-white text-slate-800 max-w-[200px] truncate outline-none cursor-pointer"
           >
             {chapters.map((ch, idx) => (
               <option key={ch.id} value={ch.id}>
-                {idx + 1}. {ch.title}
+                {idx + 1}. {effectiveChapterTitle(ch.title, bookTitle)}
               </option>
             ))}
           </select>
@@ -81,7 +83,7 @@ export const ContentPreview: React.FC<ContentPreviewProps> = ({
               className={`px-2 py-0.5 rounded font-serif transition-colors cursor-pointer ${
                 fontFamily === 'serif' ? 'bg-slate-100 font-bold text-slate-900' : 'text-slate-500 hover:text-slate-900'
               }`}
-              title="Serif font"
+              aria-pressed={fontFamily === "serif"}
             >
               {t.preview.serif}
             </button>
@@ -90,7 +92,7 @@ export const ContentPreview: React.FC<ContentPreviewProps> = ({
               className={`px-2 py-0.5 rounded font-sans transition-colors cursor-pointer ${
                 fontFamily === 'sans' ? 'bg-slate-100 font-bold text-slate-900' : 'text-slate-500 hover:text-slate-900'
               }`}
-              title="Sans font"
+              aria-pressed={fontFamily === "sans"}
             >
               {t.preview.sans}
             </button>
@@ -133,7 +135,7 @@ export const ContentPreview: React.FC<ContentPreviewProps> = ({
               {t.preview.chapterNumber} {currentChapterIndex + 1} / {chapters.length}
             </span>
             <h2 className="text-2xl sm:text-3xl font-bold text-stone-900 mt-2 font-sans tracking-tight">
-              {currentChapter?.title || bookTitle}
+              {effectiveChapterTitle(currentChapter?.title ?? '', bookTitle)}
             </h2>
           </div>
 
@@ -141,7 +143,7 @@ export const ContentPreview: React.FC<ContentPreviewProps> = ({
           {currentChapter?.elements && currentChapter.elements.length > 0 ? (
             <div className="space-y-4 text-stone-800 leading-relaxed text-justify">
               {currentChapter.elements
-                .filter((el, idx) => !(idx === 0 && el.type === 'heading' && el.text === currentChapter?.title))
+                .filter((el, idx) => !(idx === 0 && el.type === 'heading' && (el.id === currentChapter?.headingId || el.text === currentChapter?.title)))
                 .map((el) => (
                   <RenderElement key={el.id} el={el} />
                 ))}
@@ -160,7 +162,7 @@ export const ContentPreview: React.FC<ContentPreviewProps> = ({
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-stone-200 hover:bg-stone-100 transition-colors cursor-pointer"
               >
                 <ChevronLeft className="w-3.5 h-3.5" />
-                <span className="truncate max-w-[140px]">{prevChapter.title}</span>
+                <span className="truncate max-w-[140px]">{effectiveChapterTitle(prevChapter.title, bookTitle)}</span>
               </button>
             ) : <div />}
 
@@ -169,7 +171,7 @@ export const ContentPreview: React.FC<ContentPreviewProps> = ({
                 onClick={() => onSelectChapter(nextChapter.id)}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-stone-200 hover:bg-stone-100 transition-colors cursor-pointer"
               >
-                <span className="truncate max-w-[140px]">{nextChapter.title}</span>
+                <span className="truncate max-w-[140px]">{effectiveChapterTitle(nextChapter.title, bookTitle)}</span>
                 <ChevronRight className="w-3.5 h-3.5" />
               </button>
             ) : <div />}
@@ -180,18 +182,14 @@ export const ContentPreview: React.FC<ContentPreviewProps> = ({
   );
 };
 
-function formatInlineText(text: string): React.ReactNode {
-  if (!text) return '';
-  const parts = text.split(/(\*\*.*?\*\*|\*.*?\*)/g);
-  return parts.map((part, idx) => {
-    if (part.startsWith('**') && part.endsWith('**')) {
-      return <strong key={idx} className="font-bold text-stone-900">{part.slice(2, -2)}</strong>;
-    }
-    if (part.startsWith('*') && part.endsWith('*')) {
-      return <em key={idx} className="italic text-stone-700">{part.slice(1, -1)}</em>;
-    }
-    return part;
-  });
+function formatInline(text?: string, runs?: InlineRun[]): React.ReactNode {
+  return runs?.map((run, index) => (
+    <React.Fragment key={index}>
+      {run.italic
+        ? <em>{run.bold ? <strong>{run.text}</strong> : run.text}</em>
+        : run.bold ? <strong>{run.text}</strong> : run.text}
+    </React.Fragment>
+  )) ?? text;
 }
 
 const RenderElement: React.FC<{ el: ContentElement }> = ({ el }) => {
@@ -199,23 +197,24 @@ const RenderElement: React.FC<{ el: ContentElement }> = ({ el }) => {
     case 'heading': {
       const level = el.level || 2;
       if (level === 1) {
-        return <h1 className="text-xl sm:text-2xl font-bold font-sans text-stone-900 mt-6 mb-3">{el.text}</h1>;
+        return <h1 className="text-xl sm:text-2xl font-bold font-sans text-stone-900 mt-6 mb-3">{formatInline(el.text, el.inline)}</h1>;
       }
       if (level === 2) {
-        return <h2 className="text-lg sm:text-xl font-bold font-sans text-stone-900 mt-5 mb-2">{el.text}</h2>;
+        return <h2 className="text-lg sm:text-xl font-bold font-sans text-stone-900 mt-5 mb-2">{formatInline(el.text, el.inline)}</h2>;
       }
-      return <h3 className="text-base sm:text-lg font-semibold font-sans text-stone-900 mt-4 mb-2">{el.text}</h3>;
+      return <h3 className="text-base sm:text-lg font-semibold font-sans text-stone-900 mt-4 mb-2">{formatInline(el.text, el.inline)}</h3>;
     }
     case 'paragraph': {
-      return <p className="indent-6 leading-relaxed my-2">{formatInlineText(el.text || '')}</p>;
+      return <p className="indent-6 leading-relaxed my-2">{formatInline(el.text, el.inline)}</p>;
     }
     case 'list': {
       const isOrdered = el.listType === 'ordered';
       const Tag = isOrdered ? 'ol' : 'ul';
       return (
-        <Tag className={`my-3 pl-6 space-y-1 ${isOrdered ? 'list-decimal' : 'list-disc'}`}>
+        <Tag start={isOrdered ? el.listStart : undefined}
+          className={`my-3 pl-6 space-y-1 ${isOrdered ? 'list-decimal' : 'list-disc'}`}>
           {(el.items || []).map((item, idx) => (
-            <li key={idx} className="leading-normal">{item}</li>
+            <li key={idx} className="leading-normal">{formatInline(item, el.itemInline?.[idx])}</li>
           ))}
         </Tag>
       );
@@ -223,7 +222,7 @@ const RenderElement: React.FC<{ el: ContentElement }> = ({ el }) => {
     case 'blockquote': {
       return (
         <blockquote className="my-4 pl-4 border-l-2 border-stone-400 italic text-stone-600">
-          {el.text}
+          {formatInline(el.text, el.inline)}
         </blockquote>
       );
     }
@@ -245,7 +244,7 @@ const RenderElement: React.FC<{ el: ContentElement }> = ({ el }) => {
               <thead className="bg-stone-100 font-sans font-semibold text-stone-900 border-b border-stone-200">
                 <tr>
                   {el.headers.map((h, i) => (
-                    <th key={i} className="p-2 border-r border-stone-200 last:border-0">{h}</th>
+                    <th key={i} className="p-2 border-r border-stone-200 last:border-0">{formatInline(h, el.headerInline?.[i])}</th>
                   ))}
                 </tr>
               </thead>
@@ -254,7 +253,7 @@ const RenderElement: React.FC<{ el: ContentElement }> = ({ el }) => {
               {(el.rows || []).map((row, rIdx) => (
                 <tr key={rIdx} className="border-b border-stone-100 last:border-0">
                   {row.map((c, cIdx) => (
-                    <td key={cIdx} className="p-2 border-r border-stone-100 last:border-0">{c}</td>
+                    <td key={cIdx} className="p-2 border-r border-stone-100 last:border-0">{formatInline(c, el.rowInline?.[rIdx]?.[cIdx])}</td>
                   ))}
                 </tr>
               ))}

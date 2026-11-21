@@ -8,27 +8,40 @@ export type ContentElementType =
   | 'code'
   | 'divider';
 
+export interface InlineRun {
+  text: string;
+  bold?: boolean;
+  italic?: boolean;
+}
+
 export interface ContentElement {
   id: string;
   type: ContentElementType;
   level?: 1 | 2 | 3 | 4 | 5 | 6; // for heading
   text?: string;
+  inline?: InlineRun[];
+  itemInline?: InlineRun[][];
   listType?: 'ordered' | 'unordered';
+  listStart?: number;
   items?: string[];
   src?: string; // base64 or relative image path
   alt?: string;
   caption?: string;
   headers?: string[];
+  headerInline?: InlineRun[][];
   rows?: string[][];
+  rowInline?: InlineRun[][][];
   pageNumber?: number;
 }
 
 export interface Chapter {
   id: string;
   title: string;
+  sourceTitle?: string;
   order: number;
   elements: ContentElement[];
   includedInToc: boolean;
+  headingId?: string;
 }
 
 export interface BookMetadata {
@@ -70,25 +83,10 @@ export interface NormalizedDocument {
   stats: DocumentStats;
   warnings: string[];
   scannedPagesCount?: number;
-  needsOcr?: boolean;
+  pdfPages?: ContentElement[][];
+  scanPages?: number[];
+  emptyOcrPages?: number[];
   coverCandidates?: CoverCandidate[];
-}
-
-export interface ConversionOptions {
-  detectChapters: boolean;
-  ocrMode: 'auto' | 'always' | 'never';
-  ocrLanguage: 'vie' | 'eng' | 'vie+eng';
-  removeHeaderFooter: boolean;
-  fixLineBreaks: boolean;
-  normalizeUnicode: boolean;
-}
-
-export interface ConversionProgress {
-  stage: 'idle' | 'parsing' | 'extracting' | 'ocr' | 'normalizing' | 'packaging' | 'validating' | 'done' | 'error';
-  currentStep: number;
-  totalSteps: number;
-  message: string;
-  percent?: number;
 }
 
 export interface EpubValidationResult {
@@ -102,12 +100,11 @@ export interface EpubValidationResult {
 
 export interface BatchItem {
   id: string;
-  file: File;
+  input: { path: string; name: string };
   status: 'pending' | 'processing' | 'done' | 'error';
-  progress?: ConversionProgress;
   resultBlob?: Blob;
-  resultFilename?: string;
-  resultSize?: number;
   error?: string;
-  doc?: NormalizedDocument;
+  emptyOcrPages?: number[];
+  warnings?: string[];
+  exportWarningCodes?: string[];
 }

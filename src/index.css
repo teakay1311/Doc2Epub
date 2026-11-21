@@ -1,15 +1,18 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
-  --font-serif: 'Lora', Georgia, serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-serif: "New York", Georgia, serif;
+  --font-mono: ui-monospace, Menlo, monospace;
 }
 
-@layer base {
-  body {
-    font-family: var(--font-sans);
-    color: #0f172a;
-    background-color: #f8fafc;
-  }
+body {
+  min-width: 0;
+  color: #0f172a;
+  background: #f8fafc;
+}
+
+:focus-visible {
+  outline: 2px solid #4f46e5;
+  outline-offset: 3px;
 }

@@ -2,6 +2,30 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseMarkdown, parsePlainText } from './textService';
 
+test('Markdown preserves table cells at optional trailing delimiters and ordered list starts', () => {
+  const input = [
+    '| A | B | C |',
+    '| --- | --- | --- |',
+    '| One | | **Two**',
+    '| Three | Four | Five |',
+    '',
+    '3. First',
+    '4. Second',
+    '',
+    '- Bullet',
+    '',
+    '1. Default',
+    '',
+    '0. Zero'
+  ].join('\n');
+  const { chapters } = parseMarkdown(input, 'source.md', input.length);
+  const [table, ordered, unordered, normal, zero] = chapters[0].elements;
+  assert.deepEqual(table.rows, [['One', '', 'Two'], ['Three', 'Four', 'Five']]);
+  assert.equal(table.rowInline?.[0][2][0].bold, true);
+  assert.deepEqual([ordered.listStart, unordered.listStart, normal.listStart, zero.listStart], [3, undefined, 1, 0]);
+  assert.equal(unordered.listType, 'unordered');
+});
+
 test('parseMarkdown extracts headings, blockquotes, lists, and tables', () => {
   const md = `# Tiêu đề chính
 

@@ -1,5 +1,6 @@
 import DOMPurify from 'dompurify';
-import { ContentElement, Chapter, NormalizedDocument } from '../types/document';
+import { isEmbeddedImage, parseMarkdownInline } from '../utils/inlineContent';
+import { ContentElement, InlineRun, NormalizedDocument } from '../types/document';
 import { cleanText, groupIntoChapters, stitchBrokenParagraphs, calculateDocumentStats } from '../utils/normalizer';
 
 /**
@@ -69,6 +70,7 @@ export function parseMarkdown(content: string, filename: string, fileSize: numbe
 
   let currentListItems: string[] = [];
   let currentListType: 'ordered' | 'unordered' = 'unordered';
+  let currentListStart: number | undefined;
 
   const flushList = () => {
     if (currentListItems.length > 0) {
@@ -76,10 +78,19 @@ export function parseMarkdown(content: string, filename: string, fileSize: numbe
         id: `el-${idCounter++}`,
         type: 'list',
         listType: currentListType,
+        listStart: currentListStart,
         items: [...currentListItems]
       });
       currentListItems = [];
+      currentListStart = undefined;
     }
+  };
+
+  const tableCells = (line: string) => {
+    const cells = line.split('|');
+    if (line.startsWith('|')) cells.shift();
+    if (line.endsWith('|')) cells.pop();
+    return cells.map(cleanText);
   };
 
   let inCodeBlock = false;
@@ -160,13 +171,17 @@ export function parseMarkdown(content: string, filename: string, fileSize: numbe
     }
 
     // Ordered list item: 1. text
-    const olMatch = trimmed.match(/^\d+\.\s+(.+)$/);
+    const olMatch = trimmed.match(/^(\d+)\.\s+(.+)$/);
     if (olMatch) {
       if (currentListItems.length > 0 && currentListType !== 'ordered') {
         flushList();
       }
       currentListType = 'ordered';
-      currentListItems.push(cleanText(olMatch[1]));
+      if (currentListItems.length === 0) {
+        const start = Number(olMatch[1]);
+        if (Number.isSafeInteger(start)) currentListStart = start;
+      }
+      currentListItems.push(cleanText(olMatch[2]));
       continue;
     }
 
@@ -174,7 +189,7 @@ export function parseMarkdown(content: string, filename: string, fileSize: numbe
     if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
       flushList();
       // Parse markdown table
-      const headerCells = trimmed.split('|').slice(1, -1).map(c => cleanText(c));
+      const headerCells = tableCells(trimmed);
       const nextLine = lines[i + 1]?.trim();
       if (nextLine && /^\|?[\s:\-|]+\|?$/.test(nextLine)) {
         // Table header detected
@@ -182,7 +197,7 @@ export function parseMarkdown(content: string, filename: string, fileSize: numbe
         const rows: string[][] = [];
         while (i + 1 < lines.length && lines[i + 1].trim().startsWith('|')) {
           i++;
-          const rowCells = lines[i].trim().split('|').slice(1, -1).map(c => cleanText(c));
+          const rowCells = tableCells(lines[i].trim());
           rows.push(rowCells);
         }
         elements.push({
@@ -204,7 +219,29 @@ export function parseMarkdown(content: string, filename: string, fileSize: numbe
     });
   }
 
+  if (inCodeBlock && codeBuffer.length) {
+    elements.push({ id: `el-${idCounter++}`, type: 'code', text: codeBuffer.join('\n') });
+  }
   flushList();
+  const plainText = (runs: InlineRun[]) => runs.map(run => run.text).join('');
+  for (const element of elements) {
+    if (element.text && element.type !== 'code') {
+      element.inline = parseMarkdownInline(element.text);
+      element.text = plainText(element.inline);
+    }
+    if (element.items) {
+      element.itemInline = element.items.map(parseMarkdownInline);
+      element.items = element.itemInline.map(plainText);
+    }
+    if (element.headers) {
+      element.headerInline = element.headers.map(parseMarkdownInline);
+      element.headers = element.headerInline.map(plainText);
+    }
+    if (element.rows) {
+      element.rowInline = element.rows.map(row => row.map(parseMarkdownInline));
+      element.rows = element.rowInline.map(row => row.map(plainText));
+    }
+  }
 
   const baseTitle = filename.replace(/\.[^/.]+$/, '');
   const chapters = groupIntoChapters(elements, baseTitle);
@@ -226,110 +263,116 @@ export function parseMarkdown(content: string, filename: string, fileSize: numbe
   };
 }
 
-/**
- * Parses raw HTML string, sanitizes it safely with DOMPurify, and extracts structure.
- */
+function htmlInline(node: Node, bold = false, italic = false): InlineRun[] {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return [{ text: (node.textContent || '').normalize('NFC').replace(/\s+/gu, ' '), bold, italic }];
+  }
+  if (!(node instanceof Element)) return [];
+  if (node.tagName === 'BR') return [{ text: ' ', bold, italic }];
+  return Array.from(node.childNodes).flatMap(child =>
+    htmlInline(child, bold || ['B', 'STRONG'].includes(node.tagName), italic || ['I', 'EM'].includes(node.tagName))
+  );
+}
+
 export function parseHtmlDocument(htmlContent: string, filename: string, fileSize: number): NormalizedDocument {
-  // Sanitize HTML strictly
   const sanitized = DOMPurify.sanitize(htmlContent, {
+    WHOLE_DOCUMENT: true,
     ALLOWED_TAGS: [
-      'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'span', 'b', 'i', 'strong', 'em',
-      'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'blockquote',
-      'pre', 'code', 'hr', 'img', 'figure', 'figcaption', 'div', 'section', 'article'
+      'html', 'head', 'body', 'title', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+      'p', 'span', 'b', 'i', 'strong', 'em', 'ul', 'ol', 'li', 'table', 'thead',
+      'tbody', 'tfoot', 'tr', 'th', 'td', 'blockquote', 'pre', 'code', 'hr',
+      'img', 'figure', 'figcaption', 'div', 'section', 'article', 'br'
     ],
-    ALLOWED_ATTR: ['src', 'alt', 'title', 'class', 'colspan', 'rowspan']
+    ALLOWED_ATTR: ['src', 'alt'],
+    ALLOW_DATA_ATTR: false,
+    ALLOW_ARIA_ATTR: false
   });
-
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(sanitized, 'text/html');
-
-  // Extract meta title if available
-  const docTitle = doc.querySelector('title')?.textContent?.trim() || filename.replace(/\.[^/.]+$/, '');
+  const dom = new DOMParser().parseFromString(sanitized, 'text/html');
+  const title = cleanText(dom.title) || filename.replace(/\.[^/.]+$/, '');
   const elements: ContentElement[] = [];
-  let idCounter = 1;
+  const add = (element: Omit<ContentElement, 'id'>) => elements.push({ ...element, id: `el-${elements.length + 1}` });
+  const getText = (runs: InlineRun[]) => cleanText(runs.map(run => run.text).join(''));
+  const addImage = (element: Element, caption?: string) => {
+    const src = element.getAttribute('src') || '';
+    if (isEmbeddedImage(src)) add({ type: 'image', src, alt: element.getAttribute('alt') || undefined, caption });
+  };
 
-  const walker = doc.createTreeWalker(doc.body || doc.documentElement, NodeFilter.SHOW_ELEMENT);
-  let currentNode = walker.currentNode as HTMLElement;
-
-  while (currentNode) {
-    const tagName = currentNode.tagName.toLowerCase();
-
-    if (/^h[1-6]$/.test(tagName)) {
-      const level = parseInt(tagName[1], 10) as 1 | 2 | 3 | 4 | 5 | 6;
-      const text = cleanText(currentNode.textContent || '');
-      if (text) {
-        elements.push({ id: `el-${idCounter++}`, type: 'heading', level, text });
-      }
-    } else if (tagName === 'p') {
-      const text = cleanText(currentNode.textContent || '');
-      if (text) {
-        elements.push({ id: `el-${idCounter++}`, type: 'paragraph', text });
-      }
-    } else if (tagName === 'blockquote') {
-      const text = cleanText(currentNode.textContent || '');
-      if (text) {
-        elements.push({ id: `el-${idCounter++}`, type: 'blockquote', text });
-      }
-    } else if (tagName === 'ul' || tagName === 'ol') {
-      const items = Array.from(currentNode.querySelectorAll(':scope > li'))
-        .map(li => cleanText(li.textContent || ''))
-        .filter(Boolean);
-      if (items.length > 0) {
-        elements.push({
-          id: `el-${idCounter++}`,
-          type: 'list',
-          listType: tagName === 'ol' ? 'ordered' : 'unordered',
-          items
-        });
-      }
-    } else if (tagName === 'table') {
-      const headers = Array.from(currentNode.querySelectorAll('th')).map(th => cleanText(th.textContent || ''));
-      const rows = Array.from(currentNode.querySelectorAll('tbody tr, tr:not(:has(th))')).map(tr =>
-        Array.from(tr.querySelectorAll('td')).map(td => cleanText(td.textContent || ''))
-      ).filter(r => r.length > 0);
-
-      if (headers.length > 0 || rows.length > 0) {
-        elements.push({
-          id: `el-${idCounter++}`,
-          type: 'table',
-          headers: headers.length > 0 ? headers : undefined,
-          rows
-        });
-      }
-    } else if (tagName === 'img') {
-      const src = currentNode.getAttribute('src');
-      if (src && (src.startsWith('data:') || src.startsWith('blob:'))) {
-        elements.push({
-          id: `el-${idCounter++}`,
-          type: 'image',
-          src,
-          alt: currentNode.getAttribute('alt') || 'Hình ảnh'
-        });
-      }
-    } else if (tagName === 'hr') {
-      elements.push({ id: `el-${idCounter++}`, type: 'divider' });
+  function walk(node: Node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = cleanText(node.textContent || '');
+      if (text) add({ type: 'paragraph', text });
+      return;
     }
+    if (!(node instanceof Element)) return;
 
-    const nextNode = walker.nextNode() as HTMLElement;
-    if (!nextNode) break;
-    currentNode = nextNode;
+    const tag = node.tagName;
+    if (/^H[1-6]$/.test(tag) || ['P', 'BLOCKQUOTE'].includes(tag)) {
+      const type = tag === 'P' ? 'paragraph' : tag === 'BLOCKQUOTE' ? 'blockquote' : 'heading';
+      const level = type === 'heading' ? Number(tag[1]) as ContentElement['level'] : undefined;
+      let inline: InlineRun[] = [];
+      const flush = () => {
+        const text = getText(inline);
+        if (text) add({ type, level, text, inline });
+        inline = [];
+      };
+      function visit(child: Node, bold = false, italic = false) {
+        if (child instanceof Element && child.querySelector('img')) {
+          for (const next of child.childNodes) {
+            visit(next, bold || ['B', 'STRONG'].includes(child.tagName), italic || ['I', 'EM'].includes(child.tagName));
+          }
+        } else if (child instanceof Element && child.tagName === 'IMG') {
+          flush();
+          addImage(child);
+        } else {
+          inline.push(...htmlInline(child, bold, italic));
+        }
+      }
+      for (const child of node.childNodes) visit(child);
+      flush();
+    } else if (tag === 'OL' || tag === 'UL') {
+      const items = Array.from(node.children).filter(child => child.tagName === 'LI');
+      const itemInline = items.map(item => htmlInline(item));
+      if (itemInline.length) add({ type: 'list', listType: tag === 'OL' ? 'ordered' : 'unordered',
+        items: itemInline.map(getText), itemInline });
+      for (const image of node.querySelectorAll('img')) addImage(image);
+    } else if (tag === 'TABLE') {
+      const table = node as HTMLTableElement;
+      const rows = Array.from(table.rows);
+      const header = rows[0]?.cells.length && Array.from(rows[0].cells).every(cell => cell.tagName === 'TH')
+        ? rows.shift() : undefined;
+      const headerInline = header && Array.from(header.cells).map(cell => htmlInline(cell));
+      const rowInline = rows.map(row => Array.from(row.cells).map(cell => htmlInline(cell)));
+      if (headerInline || rowInline.length) add({
+        type: 'table', headers: headerInline?.map(getText), headerInline,
+        rows: rowInline.map(row => row.map(getText)), rowInline
+      });
+      for (const image of node.querySelectorAll('img')) addImage(image);
+    } else if (tag === 'IMG') {
+      addImage(node);
+    } else if (tag === 'FIGURE') {
+      const caption = cleanText(node.querySelector('figcaption')?.textContent || '');
+      for (const image of node.querySelectorAll('img')) addImage(image, caption);
+    } else if (tag === 'PRE') {
+      add({ type: 'code', text: (node.textContent || '').normalize('NFC') });
+    } else if (tag === 'HR') {
+      add({ type: 'divider' });
+    } else if (['B', 'I', 'STRONG', 'EM', 'SPAN', 'CODE'].includes(tag) && !node.querySelector('img')) {
+      const inline = htmlInline(node);
+      const text = getText(inline);
+      if (text) add({ type: 'paragraph', text, inline });
+    } else {
+      for (const child of node.childNodes) walk(child);
+    }
   }
 
-  const chapters = groupIntoChapters(elements, docTitle);
-  const stats = calculateDocumentStats(chapters);
-
+  for (const child of dom.body.childNodes) walk(child);
+  const chapters = groupIntoChapters(elements, title);
   return {
     id: `doc-${Date.now()}`,
-    filename,
-    fileSize,
-    fileType: 'html',
-    metadata: {
-      title: docTitle,
-      author: '',
-      language: 'vi'
-    },
+    filename, fileSize, fileType: 'html',
+    metadata: { title, author: '', language: 'vi' },
     chapters,
-    stats,
+    stats: calculateDocumentStats(chapters),
     warnings: []
   };
 }

@@ -1,221 +1,152 @@
-import * as pdfjsLib from 'pdfjs-dist';
-import { NormalizedDocument, ContentElement, Chapter } from '../types/document';
+import type { PDFDocumentProxy } from 'pdfjs-dist';
+import type { ContentElement, NormalizedDocument } from '../types/document';
 import { cleanText, groupIntoChapters, stitchBrokenParagraphs, calculateDocumentStats } from '../utils/normalizer';
 
-// Configure PDF.js worker in Vite/browser environment (local bundled asset first, fallback to CDN)
-if (typeof window !== 'undefined') {
+export interface PdfSession {
+  proxy: PDFDocumentProxy;
+  dispose: () => Promise<void>;
+}
+
+export function converterAsset(path: string): string {
+  return new URL(`converter-assets/${path}`, document.baseURI).href;
+}
+
+export async function fetchConverterAsset(path: string): Promise<Response> {
+  const response = await fetch(converterAsset(path));
+  if (!response.ok) throw new Error(`Missing converter resource: ${path}`);
+  return response;
+}
+
+async function startPdfWorker(): Promise<Worker> {
+  // Load the module in the window so WebKit never has to fetch a tauri: URL from inside a worker.
+  const source = await (await fetchConverterAsset('pdf/pdf.worker.min.mjs')).text();
+  const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+  const worker = new Worker(url, { type: 'module' });
+  const listeners = new AbortController();
   try {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-      'pdfjs-dist/build/pdf.worker.min.mjs',
-      import.meta.url
-    ).href;
-  } catch {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
-  }
-}
-
-interface PdfTextItem {
-  str: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  fontSize: number;
-  fontName: string;
-}
-
-export interface PdfAnalysis {
-  totalPages: number;
-  scannedPages: number[];
-  isMostlyScanned: boolean;
-}
-
-/**
- * Renders a PDF page to a canvas element at a target scale (DPI) for OCR or preview.
- */
-export async function renderPdfPageToCanvas(
-  pdfDoc: pdfjsLib.PDFDocumentProxy,
-  pageNumber: number,
-  scale: number = 2.0
-): Promise<HTMLCanvasElement> {
-  const page = await pdfDoc.getPage(pageNumber);
-  const viewport = page.getViewport({ scale });
-
-  const canvas = document.createElement('canvas');
-  canvas.width = viewport.width;
-  canvas.height = viewport.height;
-
-  const context = canvas.getContext('2d');
-  if (!context) {
-    throw new Error('Canvas 2D context is not available');
-  }
-
-  // White background
-  context.fillStyle = '#ffffff';
-  context.fillRect(0, 0, canvas.width, canvas.height);
-
-  await page.render({
-    canvasContext: context,
-    viewport,
-    canvas
-  } as any).promise;
-
-  return canvas;
-}
-
-/**
- * Analyzes and extracts text from a PDF file using PDF.js.
- */
-export async function parsePdfDocument(
-  file: File | ArrayBuffer,
-  filename: string,
-  fileSize: number,
-  onProgress?: (current: number, total: number) => void
-): Promise<{ doc: NormalizedDocument; analysis: PdfAnalysis; pdfProxy: pdfjsLib.PDFDocumentProxy }> {
-  const arrayBuffer = file instanceof File ? await file.arrayBuffer() : file;
-  const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) });
-  const pdfDoc = await loadingTask.promise;
-
-  const totalPages = pdfDoc.numPages;
-  const scannedPages: number[] = [];
-  const allElements: ContentElement[] = [];
-  let elementId = 1;
-
-  // Track font sizes to determine body vs heading
-  const fontSizes: number[] = [];
-
-  for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
-    if (onProgress) {
-      onProgress(pageNum, totalPages);
-    }
-
-    const page = await pdfDoc.getPage(pageNum);
-    const textContent = await page.getTextContent();
-    const items = textContent.items as Array<any>;
-
-    let pageCharCount = 0;
-    const pageTextItems: PdfTextItem[] = [];
-
-    for (const item of items) {
-      if (!item.str || !item.str.trim()) continue;
-      const str = item.str;
-      pageCharCount += str.length;
-
-      // Extract transform geometry: [scaleX, skewY, skewX, scaleY, transX, transY]
-      const tx = item.transform;
-      const fontSize = Math.abs(tx[0] || tx[3] || 12);
-      fontSizes.push(fontSize);
-
-      pageTextItems.push({
-        str,
-        x: tx[4] || 0,
-        y: tx[5] || 0,
-        width: item.width || 0,
-        height: item.height || fontSize,
-        fontSize,
-        fontName: item.fontName || ''
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('PDF worker did not start')), 10000);
+      listeners.signal.addEventListener('abort', () => clearTimeout(timeout), { once: true });
+      worker.addEventListener('message', event => {
+        if (event.data?.action === 'ready') resolve();
+      }, { signal: listeners.signal });
+      worker.addEventListener('error', event => reject(new Error(event.message || 'PDF worker failed')), {
+        signal: listeners.signal, once: true
       });
-    }
-
-    // If page has fewer than 25 characters, it's likely scanned or an image page
-    if (pageCharCount < 25) {
-      scannedPages.push(pageNum);
-      continue;
-    }
-
-    // Sort items by reading order: Top-to-bottom (Y descending), Left-to-right (X ascending)
-    pageTextItems.sort((a, b) => {
-      // If Y difference is small (<= 4), treat as same line
-      if (Math.abs(b.y - a.y) <= 4) {
-        return a.x - b.x;
-      }
-      return b.y - a.y;
     });
+    return worker;
+  } catch (error) {
+    worker.terminate();
+    throw error;
+  } finally {
+    listeners.abort();
+    URL.revokeObjectURL(url);
+  }
+}
 
-    // Group items into lines
-    const lines: Array<{ text: string; fontSize: number }> = [];
-    let currentLineText = '';
-    let currentLineFontSize = 12;
-    let currentLineY: number | null = null;
+export async function renderPdfPageToCanvas(
+  pdf: PDFDocumentProxy,
+  pageNumber: number,
+  scale: number
+): Promise<HTMLCanvasElement> {
+  const page = await pdf.getPage(pageNumber);
+  try {
+    const unscaled = page.getViewport({ scale: 1 });
+    const viewport = page.getViewport({ scale: Math.min(scale, 4096 / Math.max(unscaled.width, unscaled.height)) });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    try {
+      await page.render({ canvas, viewport, intent: 'print', background: '#ffffff' }).promise;
+      return canvas;
+    } catch (error) {
+      canvas.width = canvas.height = 0;
+      throw error;
+    }
+  } finally {
+    page.cleanup();
+  }
+}
 
-    for (const item of pageTextItems) {
-      if (currentLineY === null || Math.abs(currentLineY - item.y) > 4) {
-        if (currentLineText.trim()) {
-          lines.push({ text: currentLineText.trim(), fontSize: currentLineFontSize });
+export async function parsePdfDocument(file: File, onProgress?: (current: number, total: number) => void) {
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const data = new Uint8Array(await file.arrayBuffer());
+  const port = await startPdfWorker();
+  const worker = pdfjs.PDFWorker.create({ port });
+  const task = pdfjs.getDocument({
+    data,
+    worker,
+    cMapUrl: converterAsset('pdf/cmaps/'),
+    cMapPacked: true,
+    standardFontDataUrl: converterAsset('pdf/standard_fonts/'),
+    wasmUrl: converterAsset('pdf/wasm/'),
+    iccUrl: converterAsset('pdf/iccs/'),
+    useWorkerFetch: false
+  });
+
+  const dispose = async () => {
+    try {
+      await task.destroy();
+    } finally {
+      worker.destroy();
+      port.terminate();
+    }
+  };
+  try {
+    const pdfProxy = await task.promise;
+    const pdfPages: ContentElement[][] = [];
+    const scanPages: number[] = [];
+    for (let number = 1; number <= pdfProxy.numPages; number++) {
+      onProgress?.(number, pdfProxy.numPages);
+      const page = await pdfProxy.getPage(number);
+      try {
+        const { items } = await page.getTextContent();
+        const positioned = items.filter(item => 'str' in item && item.str.trim()).map(item => {
+          if (!('str' in item)) throw new Error('Invalid PDF text item');
+          return { text: item.str, x: item.transform[4], y: item.transform[5] };
+        });
+        if (positioned.reduce((total, item) => total + item.text.trim().length, 0) < 25) {
+          scanPages.push(number);
         }
-        currentLineText = item.str;
-        currentLineFontSize = item.fontSize;
-        currentLineY = item.y;
-      } else {
-        // Space separation if gap exists
-        currentLineText += ' ' + item.str;
-        if (item.fontSize > currentLineFontSize) {
-          currentLineFontSize = item.fontSize;
+        positioned.sort((left, right) => right.y - left.y);
+        const lines: Array<{ y: number; items: typeof positioned }> = [];
+        for (const item of positioned) {
+          const last = lines.at(-1);
+          if (last && last.y - item.y <= 4) last.items.push(item);
+          else lines.push({ y: item.y, items: [item] });
         }
+        const paragraphs = stitchBrokenParagraphs(lines.map(line =>
+          line.items.sort((left, right) => left.x - right.x).map(item => item.text).join(' ')
+        ));
+        pdfPages.push(paragraphs.map(cleanText).filter(Boolean).map((text, index) => ({
+          id: `pdf-${number}-${index}`,
+          type: 'paragraph',
+          text,
+          pageNumber: number
+        })));
+      } finally {
+        page.cleanup();
       }
     }
-    if (currentLineText.trim()) {
-      lines.push({ text: currentLineText.trim(), fontSize: currentLineFontSize });
-    }
 
-    // Median/average line processing
-    const rawLineTexts = lines.map(l => l.text);
-    const stitched = stitchBrokenParagraphs(rawLineTexts);
-
-    for (const para of stitched) {
-      const cleaned = cleanText(para);
-      if (!cleaned) continue;
-
-      // Check if line is a header by font size or title
-      // We'll mark as heading if length <= 80 and starts with chapter pattern
-      allElements.push({
-        id: `pdf-el-${elementId++}`,
-        type: 'paragraph',
-        text: cleaned,
-        pageNumber: pageNum
-      });
-    }
+    const title = file.name.replace(/\.[^/.]+$/, '');
+    const chapters = groupIntoChapters(pdfPages.flat(), title);
+    const doc: NormalizedDocument = {
+      id: crypto.randomUUID(),
+      filename: file.name,
+      fileSize: file.size,
+      fileType: 'pdf',
+      metadata: { title, author: '', language: 'vi' },
+      chapters,
+      stats: { ...calculateDocumentStats(chapters), pageCount: pdfProxy.numPages },
+      warnings: [],
+      scannedPagesCount: scanPages.length,
+      pdfPages,
+      scanPages
+    };
+    return { doc, pdf: { proxy: pdfProxy, dispose } };
+  } catch (error) {
+    await dispose().catch(() => {});
+    throw error;
   }
-
-  // Determine median font size
-  fontSizes.sort((a, b) => a - b);
-  const medianFontSize = fontSizes[Math.floor(fontSizes.length / 2)] || 12;
-
-  const baseTitle = filename.replace(/\.[^/.]+$/, '');
-  const chapters = groupIntoChapters(allElements, baseTitle);
-  const stats = calculateDocumentStats(chapters);
-  stats.pageCount = totalPages;
-
-  const isMostlyScanned = scannedPages.length >= Math.ceil(totalPages * 0.4);
-  const warnings: string[] = [];
-  if (scannedPages.length > 0) {
-    warnings.push(
-      `Phát hiện ${scannedPages.length}/${totalPages} trang có thể là bản scan dạng hình ảnh (trang ${scannedPages.slice(0, 5).join(', ')}${scannedPages.length > 5 ? '...' : ''}).`
-    );
-  }
-
-  const doc: NormalizedDocument = {
-    id: `doc-${Date.now()}`,
-    filename,
-    fileSize,
-    fileType: 'pdf',
-    metadata: {
-      title: baseTitle,
-      author: '',
-      language: 'vi'
-    },
-    chapters,
-    stats,
-    warnings,
-    scannedPagesCount: scannedPages.length,
-    needsOcr: scannedPages.length > 0
-  };
-
-  const analysis: PdfAnalysis = {
-    totalPages,
-    scannedPages,
-    isMostlyScanned
-  };
-
-  return { doc, analysis, pdfProxy: pdfDoc };
 }
